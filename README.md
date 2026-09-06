@@ -5,8 +5,9 @@
 [![license](https://img.shields.io/github/license/mgcrea/swift-cloudflare-kit.svg)](./LICENSE)
 
 The Cloudflare client surface shared by [D1Explorer](https://d1-explorer.mgcrea.io) and
-[R2Explorer](https://r2-explorer.mgcrea.io) — credential storage and per-request token
-resolution, extracted so the two apps stop maintaining two copies of it.
+[R2Explorer](https://r2-explorer.mgcrea.io) — OAuth, the loopback redirect, credential
+storage, per-request token resolution and the GraphQL analytics transport, extracted so the
+apps stop maintaining two copies of it.
 
 ## Why this is not part of `swift-support-kit`
 
@@ -89,13 +90,82 @@ bare SwiftPM test bundle has neither — the suite probes for that and gates tho
 than failing and being explained away in a comment. `-34018` (`errSecMissingEntitlement`) and
 `-25308` (`errSecInteractionNotAllowed`) are the environment saying no, not a regression.
 
+### `CloudflareOAuth`
+
+The authorization-code + PKCE flow against `dash.cloudflare.com`. **A public client: there is
+no secret anywhere, in this package or in a consumer.** A shipped binary cannot keep one, so
+clients register with `token_endpoint_auth_method: "none"` and every leg is protected by PKCE
+— the `code` is worthless to anyone without the matching verifier.
+
+```swift
+let oauth = CloudflareOAuth(configuration: .init(
+  clientID: "0dee75df3cb92c56ce49cb64a9e702a6",
+  appName: "D1Explorer",
+  requiredScopes: ["d1.read", "account-settings.read"],
+  optionalScopes: ["d1.write", "account-analytics.read"],
+  redirectPorts: [53682, 53683, 53684, 53685],
+  loggingSubsystem: "io.mgcrea.SwiftD1"))
+```
+
+`CloudflareOAuthConfiguration` is the whole point of the extraction: the flow is identical
+everywhere, and only four things genuinely differ.
+
+| | Why it cannot be shared |
+| --- | --- |
+| `clientID` | registered per app; sharing one makes users consent to another app's name, and revoking one grant would revoke the other's |
+| scopes | asking for a scope the client is not registered for fails the whole authorization as `invalid_scope`, so they cannot be unioned |
+| `redirectPorts` | only to avoid colliding with a sibling app mid-sign-in — see below |
+| `appName` | shown in the browser tab the redirect lands on, where the user is outside the app |
+
+**On ports.** An earlier comment in D1Explorer said Cloudflare matches `redirect_uris`
+exactly, so every port had to be registered. That was wrong, and R2Explorer's copy had
+already corrected it: Cloudflare applies RFC 8252 §7.3, so the loopback **port is not
+matched** (the path is). The fixed list is collision-avoidance between sibling apps, not a
+Cloudflare requirement.
+
+`offline_access` is appended by `allScopes` rather than kept in `requiredScopes`, because
+that list drives consent-screen copy and the declined-scope comparison and should stay a list
+of things the *app* does. **Requesting it is not optional and not automatic**: registering
+`refresh_token` in `grant_types` only makes the scope available, and omitting it yields an
+access token with no refresh token, a grant that dies at the first expiry, and a user bounced
+back to the browser mid-session.
+
+### `LoopbackRedirectListener` and `LoopbackRedirectParser`
+
+A one-shot loopback HTTP listener, split from the pure parser so every decision about whether
+a sign-in succeeded is testable without binding a port.
+
+`ASWebAuthenticationSession` cannot do this — its `callbackURLScheme` cannot be `http`, and
+Cloudflare does not accept a custom scheme as a `redirect_uri`. A consuming app target must
+set `ENABLE_INCOMING_NETWORK_CONNECTIONS = YES`; under the App Sandbox the bind otherwise
+fails with no useful error and the symptom is a sign-in that hangs until it times out.
+
+The page left in the browser references **nothing off-device** — no stylesheet, font or
+image. A single `<img>` would be a request the app caused off Cloudflare and would quietly
+make a consumer's privacy label wrong, so a test asserts it.
+
+### `CloudflareGraphQL`
+
+The analytics endpoint, and its two traps: a failure arrives as **HTTP 200 carrying an
+`errors` array**, and a missing permission has to read as an instruction rather than an
+error.
+
+Both apps had reimplemented this and the copies had drifted in ways that changed behaviour:
+
+| | D1Explorer | R2Explorer | here |
+| --- | --- | --- | --- |
+| `message` | `String?` | `String` | `String?` |
+| several errors | reported `.first` | joined with `"; "` | joined |
+| accepted status | `200` only | `200...299` | `200...299` |
+| permission words | 6, incl. `not entitled`, `access denied` | 6, incl. `unauthorised`, `not authorized` | the union of both |
+
+That last row is the one that mattered: the same Cloudflare response could read as a fixable
+instruction in one app and a generic failure in the other.
+
 ## Status
 
-First extraction pass. Still living in both app repos and **not yet here**:
-`CloudflareOAuth` + `LoopbackRedirectListener` (the largest win and the most drift),
-`CloudflareAccountStore`, and the GraphQL transport that both apps reimplement — including
-its two Cloudflare quirks, an HTTP 200 carrying an `errors` array, and a missing permission
-that has to read as an instruction rather than an error.
+`CloudflareAccountStore` is the remaining duplicate. It is the most app-entangled of the
+four — it reaches into each app's connection model — and is the next extraction.
 
 ## License
 
