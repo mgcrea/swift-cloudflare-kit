@@ -62,7 +62,12 @@ answer to "is *this* token syncing?".
 | `.malformed` | the item exists, its bytes are not UTF-8 | re-authenticate |
 | `.saveFailed(OSStatus)` | the write was refused | — |
 
-The two apps disagreed about the third one before this package existed. One reported an
+**Do not reach these cases through a typealias in a `catch`.** `catch
+MyShim.KeychainError.notFound`, where that is a typealias to this enum, does not compile — a
+catch clause matches against `any Error`, so the case must be reachable as an enum-element
+pattern, and a typealias is not. Write `catch KeychainStore.KeychainError.notFound`.
+
+The two apps disagreed about `.malformed` before this package existed. One reported an
 undecodable payload as `.notFound`, which claims an item that exists does not; the other
 reported it as `.readFailed(errSecSuccess)`, which renders as "Keychain read failed (OSStatus
 0)". Neither was true.

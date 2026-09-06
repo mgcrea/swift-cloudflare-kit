@@ -108,13 +108,18 @@ public struct KeychainStore: Sendable {
     SecItemDelete(query as CFDictionary)
   }
 
-  /// Deliberately **not** `Equatable`.
+  /// Not `Equatable`, and it does not need to be — the tests match cases with `if case`.
   ///
-  /// Adding that conformance changes how Swift resolves `~=` for a `catch` pattern, and
-  /// every `catch KeychainError.notFound` in both apps stops compiling with "referencing
-  /// operator function '~=' on '_ErrorCodeProtocol' requires that
-  /// 'KeychainStore.KeychainError' conform to '_ErrorCodeProtocol'". The tests compare
-  /// cases with `if case` instead; that is cheaper than churning every call site.
+  /// A note for consumers, because it cost a build to learn: **do not reach this type
+  /// through a typealias in a `catch` pattern.** `catch MyShim.KeychainError.notFound`,
+  /// where `MyShim.KeychainError` is a typealias to this enum, does not compile —
+  ///
+  ///     referencing operator function '~=' on '_ErrorCodeProtocol' requires that
+  ///     'KeychainStore.KeychainError' conform to '_ErrorCodeProtocol'
+  ///
+  /// A catch clause matches against `any Error`, so the case has to be reachable as an
+  /// enum-element pattern, and a typealias is not. Name the type outright:
+  /// `catch KeychainStore.KeychainError.notFound`.
   public enum KeychainError: LocalizedError {
     case saveFailed(OSStatus)
     /// Nothing is stored under this key.
