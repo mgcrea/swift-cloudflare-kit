@@ -162,10 +162,62 @@ Both apps had reimplemented this and the copies had drifted in ways that changed
 That last row is the one that mattered: the same Cloudflare response could read as a fixable
 instruction in one app and a generic failure in the other.
 
+### `CloudflareAccountStore`
+
+The accounts a user has signed in to, their grants, and the token refresh that keeps them
+alive. `@Observable`, so a consumer injects it through `@Environment`.
+
+Everything app-shaped is injected through `Dependencies` rather than imported — the Keychain
+is three closures, storage is a URL, and listing accounts is this package's own
+`CloudflareAccountsAPI`. That is what lets one store back two apps whose Keychain
+namespaces, storage directories and connection models all differ.
+
+```swift
+CloudflareAccountStore(
+  storageURL: Self.defaultStorageURL(),
+  dependencies: .init(
+    oauth: .d1Explorer,
+    keychainKeyPrefix: "com.swiftd1.oauth.",
+    readSecret: { try KeychainHelper.read(forKey: $0) },
+    saveSecret: { try KeychainHelper.save($0, forKey: $1, synchronizable: $2) },
+    deleteSecret: { KeychainHelper.delete(forKey: $0) },
+    isSynchronizable: { UserDefaults.standard.bool(forKey: "iCloudKeychainSync") },
+    session: D1Client.defaultSession))
+```
+
+Three rules in here are worth knowing before changing anything:
+
+**Refreshes are serialised through an actor.** On launch several views fire at once against
+the same account. If each saw an expired token and refreshed independently, Cloudflare would
+rotate the refresh token several times and all but one of those exchanges would invalidate
+the rest — the user would be signed out by their own app opening a window.
+
+**Signing out is grant-shaped, not account-shaped.** One authorization can unlock several
+Cloudflare accounts sharing one refresh token, so revoking on behalf of one kills the others
+too. `accountsSharingGrant(with:)` is what makes local state match what Cloudflare just did.
+Revocation goes first: deleting only local state leaves a live grant the user believes they
+cancelled. If it fails, local state is cleared anyway — someone who asked to sign out must
+end up signed out — and the error is rethrown so the caller can point at Connected
+Applications.
+
+**A refresh response may or may not rotate the refresh token.** Writing `response.refreshToken`
+unconditionally overwrites a good stored token with nothing on the responses that reuse the
+old one, signing the user out at the following expiry.
+
+`loadsFromDisk: false` gives a demo or screenshot build an empty store, so a run on a
+developer's machine never renders their real account names.
+
 ## Status
 
-`CloudflareAccountStore` is the remaining duplicate. It is the most app-entangled of the
-four — it reaches into each app's connection model — and is the next extraction.
+Extraction complete: `CloudflareOAuth`, `LoopbackRedirectListener`/`Parser`, `PKCE`,
+`CloudflareGraphQL`, `CloudflareAccount`, `CloudflareAccountsAPI`, `CloudflareAccountStore`,
+`TokenProvider` and `KeychainStore` all live here, and neither app carries a copy.
+
+One sharp edge is stated rather than papered over: `CloudflareAccountStore.accessToken(for:)`
+is not main-actor isolated — clients call it from arbitrary contexts — and it reads
+`accounts` to find a Keychain key. Every *mutation* of `accounts` is `@MainActor`. Closing
+the read means moving the id-to-key mapping into the actor, which is a change to make
+deliberately rather than as a side effect of an extraction.
 
 ## License
 
