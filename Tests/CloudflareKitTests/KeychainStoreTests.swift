@@ -53,7 +53,7 @@ struct KeychainStoreTests {
     let key = uniqueKey()
     try Self.store.save("to-delete", forKey: key)
     Self.store.delete(forKey: key)
-    #expect(throws: KeychainStore.KeychainError.notFound) {
+    #expect(throws: KeychainStore.KeychainError.self) {
       try Self.store.read(forKey: key)
     }
   }
@@ -70,7 +70,7 @@ struct KeychainStoreTests {
       r2.delete(forKey: key)
     }
     try d1.save("d1-token", forKey: key)
-    #expect(throws: KeychainStore.KeychainError.notFound) { try r2.read(forKey: key) }
+    #expect(throws: KeychainStore.KeychainError.self) { try r2.read(forKey: key) }
     #expect(try d1.read(forKey: key) == "d1-token")
   }
 
@@ -85,7 +85,7 @@ struct KeychainStoreTests {
   // MARK: - Pure
 
   @Test func readingAnAbsentKeyIsNotFound() {
-    #expect(throws: KeychainStore.KeychainError.notFound) {
+    #expect(throws: KeychainStore.KeychainError.self) {
       try Self.store.read(forKey: "definitely-absent-\(UUID().uuidString)")
     }
   }
@@ -113,12 +113,34 @@ struct KeychainStoreTests {
         == "Keychain item is not readable text")
   }
 
-  @Test func malformedIsDistinctFromNotFound() {
+  @Test func malformedIsItsOwnCase() {
     // The divergence this extraction settled: an item that exists but is not UTF-8 is
     // neither missing nor a read failure, and both apps used to claim one of those.
-    #expect(KeychainStore.KeychainError.malformed != KeychainStore.KeychainError.notFound)
-    #expect(
-      KeychainStore.KeychainError.malformed != KeychainStore.KeychainError.readFailed(errSecSuccess)
-    )
+    //
+    // Compared with `if case` rather than `==` on purpose — `KeychainError` must not be
+    // Equatable, or `catch KeychainError.notFound` stops compiling in both apps.
+    if case .notFound = KeychainStore.KeychainError.malformed {
+      Issue.record("malformed must not match notFound")
+    }
+    if case .readFailed = KeychainStore.KeychainError.malformed {
+      Issue.record("malformed must not match readFailed")
+    }
+    if case .malformed = KeychainStore.KeychainError.malformed {
+    } else {
+      Issue.record("malformed must match itself")
+    }
+  }
+
+  @Test func absentKeyIsNotFoundSpecifically() {
+    // Narrower than the `.self` throws check above: the *case* matters, because
+    // ConnectionDoctor catches exactly this one to tell the user to paste a credential.
+    do {
+      _ = try Self.store.read(forKey: "absent-\(UUID().uuidString)")
+      Issue.record("expected a throw")
+    } catch KeychainStore.KeychainError.notFound {
+      // expected
+    } catch {
+      Issue.record("expected .notFound, got \(error)")
+    }
   }
 }

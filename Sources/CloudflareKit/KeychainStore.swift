@@ -108,7 +108,14 @@ public struct KeychainStore: Sendable {
     SecItemDelete(query as CFDictionary)
   }
 
-  public enum KeychainError: LocalizedError, Equatable {
+  /// Deliberately **not** `Equatable`.
+  ///
+  /// Adding that conformance changes how Swift resolves `~=` for a `catch` pattern, and
+  /// every `catch KeychainError.notFound` in both apps stops compiling with "referencing
+  /// operator function '~=' on '_ErrorCodeProtocol' requires that
+  /// 'KeychainStore.KeychainError' conform to '_ErrorCodeProtocol'". The tests compare
+  /// cases with `if case` instead; that is cheaper than churning every call site.
+  public enum KeychainError: LocalizedError {
     case saveFailed(OSStatus)
     /// Nothing is stored under this key.
     case notFound
