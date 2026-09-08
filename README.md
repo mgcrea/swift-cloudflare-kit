@@ -135,14 +135,61 @@ back to the browser mid-session.
 A one-shot loopback HTTP listener, split from the pure parser so every decision about whether
 a sign-in succeeded is testable without binding a port.
 
-`ASWebAuthenticationSession` cannot do this — its `callbackURLScheme` cannot be `http`, and
-Cloudflare does not accept a custom scheme as a `redirect_uri`. A consuming app target must
-set `ENABLE_INCOMING_NETWORK_CONNECTIONS = YES`; under the App Sandbox the bind otherwise
-fails with no useful error and the symptom is a sign-in that hangs until it times out.
+`ASWebAuthenticationSession` cannot serve *this* redirect — its `callbackURLScheme` cannot
+be `http`, and Cloudflare does not accept a custom scheme as a `redirect_uri`. A consuming
+app target must set `ENABLE_INCOMING_NETWORK_CONNECTIONS = YES`; under the App Sandbox the
+bind otherwise fails with no useful error and the symptom is a sign-in that hangs until it
+times out.
+
+**This path is macOS and CLI only.** See the https callback below for iOS, where it cannot
+work at all.
 
 The page left in the browser references **nothing off-device** — no stylesheet, font or
 image. A single `<img>` would be a request the app caused off Cloudflare and would quietly
 make a consumer's privacy label wrong, so a test asserts it.
+
+### The https callback, and why iOS needs one
+
+`openURL` sends the user to the system browser, which **backgrounds the app**. A suspended
+app's `NWListener` is not serviced, so the redirect completes its TCP handshake into the
+kernel backlog and is then never read: sign-in ends in `.timedOut`, after a wait that does
+not advance while the app is suspended, so the error does not even appear until the user
+comes back by themselves. It works on device only by racing the grace period iOS grants a
+backgrounding app — fine when the browser is already signed in and consent is two taps,
+hopeless on a first run with a password and 2FA.
+
+`ASWebAuthenticationSession` removes the race rather than widening it, by presenting the
+authorization page in-process so the app is never backgrounded. Its callback cannot be
+`http`, so it needs a registered https redirect:
+
+```swift
+CloudflareOAuthConfiguration(
+  …,
+  httpsCallback: .init(host: "example.mgcrea.io", path: "/oauth/callback"))
+
+// then, instead of signIn(openURL:aroundWait:)
+try await store.signIn(redirectURI: callback.redirectURI) { url in
+  try await session.authorize(url: url, host: callback.host, path: callback.path)
+}
+```
+
+`authorize` is injected because the session needs a presentation anchor — a `UIWindow` — and
+this package stays free of UIKit so a consumer's link line does too.
+
+**Four things have to agree on that string and nothing checks that they do:** the redirect
+URL registered on the OAuth client, `webcredentials:<host>` in the app's Associated Domains
+entitlement (**not** `applinks:`, which is the easy mistake), the
+`apple-app-site-association` served from that host, and the value here. A mismatch is not an
+error anywhere — it is a sign-in that opens the sheet and then reports a cancel, because
+`canceledLogin` is also what an unverifiable callback host returns.
+
+The association file must be served over https from the callback host as `200`,
+`content-type: application/json`, with **no redirect in between** — a `301` to `www.` or to
+a trailing slash fails silently, which is the usual way this breaks.
+
+`state` is checked identically on both transports, and deliberately so:
+`ASWebAuthenticationSession` verifies that the *app* is entitled to the callback host, not
+that the response is the one this flow asked for.
 
 ### `CloudflareGraphQL`
 

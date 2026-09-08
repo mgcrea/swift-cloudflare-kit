@@ -108,4 +108,53 @@ struct LoopbackRedirectParserTests {
     #expect(text.contains("Content-Length: \(Data(body.utf8).count)"))
     #expect(text.hasPrefix("HTTP/1.1 200 OK"))
   }
+  // MARK: - Callback URLs handed over whole
+
+  @Test func queryItems_readsAnHTTPSCallbackURL() throws {
+    let items = try #require(
+      LoopbackRedirectParser.queryItems(
+        callbackURL: URL(string: "https://almanac.mgcrea.io/oauth/callback?code=abc&state=xyz")!))
+    #expect(items["code"] == "abc")
+    #expect(items["state"] == "xyz")
+  }
+
+  @Test func queryItems_readsAnErrorFromACallbackURL() throws {
+    let items = try #require(
+      LoopbackRedirectParser.queryItems(
+        callbackURL: URL(string: "https://almanac.mgcrea.io/oauth/callback?error=access_denied")!))
+    #expect(
+      LoopbackRedirectParser.outcome(query: items, expectedState: "xyz")
+        == .failure(.cancelled))
+  }
+
+  /// The point of sharing `outcome` between the two transports: a callback that arrived
+  /// through `ASWebAuthenticationSession` is no more trusted than one off a socket. The OS
+  /// vouches that the app may receive the host, not that this is the response we asked for.
+  @Test func callbackURL_withTheWrongStateIsRejected() throws {
+    let items = try #require(
+      LoopbackRedirectParser.queryItems(
+        callbackURL: URL(string: "https://almanac.mgcrea.io/oauth/callback?code=abc&state=attacker")!))
+    #expect(
+      LoopbackRedirectParser.outcome(query: items, expectedState: "xyz")
+        == .failure(.stateMismatch))
+  }
+
+  @Test func queryItems_readsNoParametersFromABareCallbackURL() throws {
+    let items = try #require(
+      LoopbackRedirectParser.queryItems(
+        callbackURL: URL(string: "https://almanac.mgcrea.io/oauth/callback")!))
+    #expect(items.isEmpty)
+    #expect(
+      LoopbackRedirectParser.outcome(query: items, expectedState: "xyz")
+        == .failure(.stateMismatch))
+  }
+
+  // MARK: - The registered https redirect
+
+  @Test func httpsCallback_buildsTheRegisteredRedirectURI() {
+    let callback = CloudflareOAuthConfiguration.HTTPSCallback(
+      host: "almanac.mgcrea.io", path: "/oauth/callback")
+    #expect(callback.redirectURI == "https://almanac.mgcrea.io/oauth/callback")
+  }
+
 }

@@ -164,6 +164,11 @@ public final class CloudflareAccountStore: @unchecked Sendable {
   /// system browser, not an embedded session — see ``LoopbackRedirectListener`` for why
   /// `ASWebAuthenticationSession` cannot serve a loopback redirect.
   ///
+  /// **This is the macOS and CLI path.** On iOS use ``signIn(redirectURI:authorize:)``: the
+  /// browser backgrounds the app there, and a suspended app does not read the connection the
+  /// redirect opens, so this one fails whenever the user takes longer than the grace period
+  /// iOS grants — which a first sign-in, with a password and 2FA, always does.
+  ///
   /// - Parameter aroundWait: wraps the wait for the redirect. On iOS the caller passes a
   ///   background-task assertion here: opening the browser backgrounds the app, and a
   ///   suspended app's `NWListener` stops accepting, so the redirect would land on a dead
@@ -193,9 +198,60 @@ public final class CloudflareAccountStore: @unchecked Sendable {
       code = try await wait()
     }
 
+    return try await complete(
+      code: code, verifier: pkce.verifier, redirectURI: redirectURI)
+  }
+
+  /// Runs the same flow against a redirect the app is handed whole, rather than one it has
+  /// to catch on a socket.
+  ///
+  /// This is the iOS path, and the reason it exists is that the loopback one cannot work
+  /// there: `openURL` backgrounds the app, and a suspended app never reads the connection
+  /// the redirect opens. `authorize` is injected for the same reason `openURL` is — an
+  /// `ASWebAuthenticationSession` needs a presentation anchor, which is a `UIWindow`, and
+  /// this package stays free of UIKit so the app's link line does.
+  ///
+  /// - Parameter redirectURI: must be registered on the OAuth client and must match what
+  ///   `authorize` will actually intercept. Cloudflare matches the path exactly.
+  /// - Parameter authorize: sends the user to the authorization URL and returns the URL
+  ///   Cloudflare redirected to, query string intact.
+  @MainActor
+  public func signIn(
+    redirectURI: String,
+    authorize: @Sendable (URL) async throws -> URL
+  ) async throws -> [CloudflareAccount] {
+    let oauth = dependencies.oauth
+    let state = PKCE.makeState()
+    let pkce = PKCE()
+
+    let callbackURL = try await authorize(
+      oauth.authorizationURL(
+        state: state, challenge: pkce.challenge, redirectURI: redirectURI))
+
+    // The `state` check matters just as much here as on the loopback socket, and for a
+    // reason worth being explicit about: `ASWebAuthenticationSession` verifies that the
+    // *app* is entitled to the callback host, not that the response is the one this flow
+    // asked for. Sharing `outcome` with the loopback path is what stops the two transports
+    // from disagreeing about that.
+    guard let query = LoopbackRedirectParser.queryItems(callbackURL: callbackURL) else {
+      throw CloudflareOAuthError.invalidResponse
+    }
+    let code = try LoopbackRedirectParser.outcome(query: query, expectedState: state).get()
+    return try await complete(
+      code: code, verifier: pkce.verifier, redirectURI: redirectURI)
+  }
+
+  /// Everything after the authorization code arrives, shared by both transports: exchange,
+  /// check the grant is usable, and store it. Factored out rather than duplicated because a
+  /// second copy of the `noAccounts` / `noRefreshToken` ordering would drift.
+  @MainActor
+  private func complete(
+    code: String, verifier: String, redirectURI: String
+  ) async throws -> [CloudflareAccount] {
+    let oauth = dependencies.oauth
     let response = try await oauth.exchange(
       code: code,
-      verifier: pkce.verifier,
+      verifier: verifier,
       redirectURI: redirectURI,
       session: dependencies.session)
 

@@ -45,6 +45,45 @@ public struct CloudflareOAuthConfiguration: Sendable, Hashable {
   /// couple being taken.
   public let redirectPorts: [UInt16]
 
+  /// An https redirect the app receives directly, when it has one registered.
+  ///
+  /// This is the alternative to the loopback listener, and on iOS it is the only one that
+  /// actually works. `openURL` sends the user to Safari, which backgrounds the app; a
+  /// suspended app's `NWListener` is not serviced, so the redirect completes its TCP
+  /// handshake into the kernel backlog and is then never read. Sign-in ends in `.timedOut`
+  /// after a wait that does not even advance while the app is suspended. An
+  /// `ASWebAuthenticationSession` avoids the whole problem by presenting its web content
+  /// in-process, so the app is never backgrounded — but its callback cannot be `http`,
+  /// which is why this exists and why it is not simply the loopback URI with a scheme swap.
+  ///
+  /// Registering one is not free: Cloudflare's OAuth client form accepts only `http://` or
+  /// `https://` (a custom scheme is rejected outright), and
+  /// `ASWebAuthenticationSession.Callback.https(host:path:)` requires the host to be
+  /// associated with the app through **`webcredentials:`** in the Associated Domains
+  /// entitlement — not `applinks:`, which is the easy mistake. Both have to agree with the
+  /// value here, and the path is matched by Cloudflare exactly.
+  ///
+  /// `nil` means loopback-only, which is correct for a CLI and fine on macOS.
+  public let httpsCallback: HTTPSCallback?
+
+  /// A registered https redirect: where Cloudflare sends the browser, and what the app is
+  /// entitled to intercept.
+  public struct HTTPSCallback: Sendable, Hashable {
+    /// The host, e.g. `almanac.mgcrea.io`. Must match the Associated Domains entitlement.
+    public let host: String
+    /// The path, e.g. `/oauth/callback`. Matched exactly by Cloudflare, so it must match
+    /// the redirect URL registered on the OAuth client character for character.
+    public let path: String
+
+    public init(host: String, path: String) {
+      self.host = host
+      self.path = path
+    }
+
+    /// The `redirect_uri` to send in the authorization request.
+    public var redirectURI: String { "https://\(host)\(path)" }
+  }
+
   /// Subsystem for this client's `Logger`, so a consumer's logs stay under its own name.
   public let loggingSubsystem: String
 
@@ -54,7 +93,8 @@ public struct CloudflareOAuthConfiguration: Sendable, Hashable {
     requiredScopes: [String],
     optionalScopes: [String] = [],
     redirectPorts: [UInt16],
-    loggingSubsystem: String
+    loggingSubsystem: String,
+    httpsCallback: HTTPSCallback? = nil
   ) {
     self.clientID = clientID
     self.appName = appName
@@ -62,6 +102,7 @@ public struct CloudflareOAuthConfiguration: Sendable, Hashable {
     self.optionalScopes = optionalScopes
     self.redirectPorts = redirectPorts
     self.loggingSubsystem = loggingSubsystem
+    self.httpsCallback = httpsCallback
   }
 
   /// The protocol scope that asks for a refresh token. **Requesting it is not optional and

@@ -28,6 +28,23 @@ public enum LoopbackRedirectParser {
     return result
   }
 
+  /// Query parameters from a callback URL the app was handed whole, rather than read off a
+  /// socket — an `ASWebAuthenticationSession` completion, or an opened universal link.
+  ///
+  /// Separate from ``queryItems(requestLine:)`` because there is no request line to validate:
+  /// the URL arrived through a channel the OS already vouched for. ``outcome(query:expectedState:)``
+  /// is deliberately shared between the two, so the `state` check cannot be right in one
+  /// transport and wrong in the other.
+  public static func queryItems(callbackURL: URL) -> [String: String]? {
+    guard let components = URLComponents(url: callbackURL, resolvingAgainstBaseURL: false)
+    else { return nil }
+    var result: [String: String] = [:]
+    for item in components.queryItems ?? [] {
+      result[item.name] = item.value ?? ""
+    }
+    return result
+  }
+
   /// The authorization code, or the reason there isn't one.
   ///
   /// The `state` check is the whole defence against an attacker getting their own
