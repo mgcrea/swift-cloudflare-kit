@@ -102,16 +102,19 @@ public enum CloudflareGraphQL {
     token: TokenProvider,
     session: URLSession = .shared
   ) async throws -> Payload? {
-    var request = URLRequest(url: endpoint)
-    request.httpMethod = "POST"
-    request.setValue("Bearer \(try await token.token())", forHTTPHeaderField: "Authorization")
-    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-    request.httpBody = try JSONSerialization.data(withJSONObject: [
+    let body = try JSONSerialization.data(withJSONObject: [
       "query": query,
       "variables": variables,
     ])
-
-    let (data, response) = try await session.data(for: request)
+    let (data, response) = try await token.data(
+      for: { bearer in
+        var request = URLRequest(url: endpoint)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(bearer)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = body
+        return request
+      }, session: session)
     guard let http = response as? HTTPURLResponse else {
       throw CloudflareGraphQLError.invalidResponse
     }

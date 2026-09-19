@@ -57,6 +57,18 @@ actor TokenStore {
   func forget(_ accountID: String) {
     cache[accountID] = nil
   }
+
+  /// Drops `token` if it is still the cached one, and says how long it had left.
+  ///
+  /// Only that token: another request may have minted a new one between the refusal and this
+  /// call, and throwing that away would punish a good token for a bad one. The lifetime left
+  /// is the number that explains the refusal — a token refused with fifty minutes to go was
+  /// revoked, not aged.
+  func forget(_ accountID: String, ifToken token: String) -> TimeInterval? {
+    guard let cached = cache[accountID], cached.value == token else { return nil }
+    cache[accountID] = nil
+    return cached.expiry.timeIntervalSinceNow
+  }
 }
 
 /// The Cloudflare accounts a user has signed in to, and their OAuth grants.
@@ -418,13 +430,31 @@ public final class CloudflareAccountStore: @unchecked Sendable {
     save()
   }
 
+  /// Forgets an access token Cloudflare refused, so the next request mints a new one.
+  ///
+  /// Without this a refused token stays cached until its own expiry, and every request until
+  /// then fails with a 401 that reads like a missing permission.
+  public func invalidate(accountID: String, token: String, reason: String) async {
+    guard let remaining = await tokens.forget(accountID, ifToken: token) else { return }
+    log.error(
+      """
+      Cloudflare refused an access token with \(Int(remaining), privacy: .public)s of its \
+      stated lifetime left: \(reason, privacy: .public)
+      """)
+  }
+
   /// A provider a client can hold. Reads through ``accessToken(for:)`` per request, so a
-  /// long-lived client never goes stale.
+  /// long-lived client never goes stale, and hears about a refused token so it does not keep
+  /// sending one.
   public func tokenProvider(for accountID: String) -> TokenProvider {
-    .renewing { [weak self] in
-      guard let self else { throw CloudflareOAuthError.grantExpired }
-      return try await self.accessToken(for: accountID)
-    }
+    .refreshable(
+      resolve: { [weak self] in
+        guard let self else { throw CloudflareOAuthError.grantExpired }
+        return try await self.accessToken(for: accountID)
+      },
+      invalidate: { [weak self] token, reason in
+        await self?.invalidate(accountID: accountID, token: token, reason: reason)
+      })
   }
 
   // MARK: - Persistence
