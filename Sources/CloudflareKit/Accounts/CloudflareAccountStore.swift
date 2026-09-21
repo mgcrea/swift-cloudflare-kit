@@ -4,13 +4,23 @@ import os
 
 /// Serializes token refreshes so a burst of concurrent requests mints one token, not N.
 ///
+/// **Per grant, not per account.** One sign-in can unlock several accounts, and they share
+/// its refresh token. Serialized per account, an app loading three of them at launch
+/// refreshed the same grant three times in the same instant, and Cloudflare refused two of
+/// the three tokens it minted (10000), then accepted them seconds later: measured in
+/// KVExplorer, whose sidebar lists every account at once. So refreshes are keyed by the
+/// refresh token the accounts share, and the one token minted is cached for all of them.
+///
 /// This is the reason the store is not simply a set of `async` methods on the `@Observable`
 /// class. On launch several views fire at once against the same account; if each saw an
 /// expired token and refreshed independently, Cloudflare would rotate the refresh token
 /// several times and all but one of those exchanges would invalidate the rest. The user
 /// would be signed out by their own app opening a window.
 actor TokenStore {
+  /// By account id.
   private var cache: [String: (value: String, expiry: Date)] = [:]
+  /// By grant: the refresh token the accounts share. Held in memory only, for as long as
+  /// the refresh takes.
   private var inFlight: [String: Task<CloudflareOAuth.TokenResponse, Error>] = [:]
 
   /// How long before expiry a token is treated as already spent. A token that passes the
@@ -22,24 +32,34 @@ actor TokenStore {
   /// missing or close to expiring. Returns `nil` when the cached token is still good — the
   /// caller keeps using what it has.
   ///
+  /// `grant` names the refresh token `accountID` holds, and `sharedWith` every account that
+  /// holds it too: a caller for any of them joins a refresh already under way, and the token
+  /// it mints is cached for all of them.
+  ///
   /// The whole cache lives inside this actor rather than on the `@Observable` store, which
   /// is what makes it safe: a client reads a token from whatever context its request
   /// happens to run on, and an unprotected dictionary would be a data race.
   func token(
     for accountID: String,
+    grant: String,
+    sharedWith accountIDs: [String] = [],
     mint: @escaping @Sendable () async throws -> CloudflareOAuth.TokenResponse
   ) async throws -> CloudflareOAuth.TokenResponse? {
     if let cached = cache[accountID], cached.expiry.timeIntervalSinceNow > Self.refreshMargin {
       return nil
     }
-    if let existing = inFlight[accountID] {
-      return try await existing.value
+    if let existing = inFlight[grant] {
+      let response = try await existing.value
+      cache[accountID] = (response.accessToken, response.expiry)
+      return response
     }
     let task = Task { try await mint() }
-    inFlight[accountID] = task
-    defer { inFlight[accountID] = nil }
+    inFlight[grant] = task
+    defer { inFlight[grant] = nil }
     let response = try await task.value
-    cache[accountID] = (response.accessToken, response.expiry)
+    for id in Set(accountIDs + [accountID]) {
+      cache[id] = (response.accessToken, response.expiry)
+    }
     return response
   }
 
@@ -64,9 +84,14 @@ actor TokenStore {
   /// call, and throwing that away would punish a good token for a bad one. The lifetime left
   /// is the number that explains the refusal — a token refused with fifty minutes to go was
   /// revoked, not aged.
+  ///
+  /// Dropped for every account caching it, since the accounts of one grant share it: the
+  /// others would otherwise each send it once more to find out the same thing.
   func forget(_ accountID: String, ifToken token: String) -> TimeInterval? {
     guard let cached = cache[accountID], cached.value == token else { return nil }
-    cache[accountID] = nil
+    for (id, entry) in cache where entry.value == token {
+      cache[id] = nil
+    }
     return cached.expiry.timeIntervalSinceNow
   }
 }
@@ -382,25 +407,37 @@ public final class CloudflareAccountStore: @unchecked Sendable {
       throw CloudflareOAuthError.grantExpired
     }
     let key = keychainKey(for: account)
-    let stored = try dependencies.readSecret(key)
+    let readSecret = dependencies.readSecret
+    let stored = try readSecret(key)
     let synchronizable = dependencies.isSynchronizable()
     let oauth = dependencies.oauth
     let session = dependencies.session
     let saveSecret = dependencies.saveSecret
+    // Every account the same sign-in unlocked, this one included. Only read on the way to a
+    // refresh, so the Keychain is not walked on every request.
+    let sharing = accounts.filter {
+      $0.id == accountID || (try? readSecret(keychainKey(for: $0))) == stored
+    }
+    let sharedKeys = sharing.map { keychainKey(for: $0) }
 
     // Returns nil when another caller refreshed while this one was waiting — the token it
     // minted is already cached, so fall through and read it.
     guard
       let response = try await tokens.token(
         for: accountID,
+        grant: stored,
+        sharedWith: sharing.map(\.id),
         mint: {
           let response = try await oauth.refresh(refreshToken: stored, session: session)
           // Cloudflare may or may not rotate the refresh token. Writing
           // `response.refreshToken` unconditionally would overwrite a perfectly good stored
           // token with nothing on the responses that reuse the old one, signing the user
-          // out at the following expiry.
+          // out at the following expiry. A rotated one goes to every account of the grant:
+          // left on the old one, the others would be signed out at their next refresh.
           if let rotated = response.refreshToken, rotated != stored {
-            try saveSecret(rotated, key, synchronizable)
+            for sharedKey in sharedKeys {
+              try saveSecret(rotated, sharedKey, synchronizable)
+            }
           }
           return response
         })
@@ -416,7 +453,10 @@ public final class CloudflareAccountStore: @unchecked Sendable {
     // because `accounts` is observed by the UI and written from it everywhere else.
     if !response.grantedScopes.isEmpty {
       let granted = response.grantedScopes
-      await MainActor.run { self.applyGrantedScopes(granted, to: accountID) }
+      let ids = sharing.map(\.id)
+      await MainActor.run {
+        for id in ids { self.applyGrantedScopes(granted, to: id) }
+      }
     }
     return response.accessToken
   }
