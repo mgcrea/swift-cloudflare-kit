@@ -96,11 +96,13 @@ public enum CloudflareGraphQL {
   /// - Parameter token: read per request rather than captured, so an OAuth access token
   ///   that expires mid-session is refreshed rather than reported as a revoked credential.
   ///   See ``TokenProvider``.
+  /// - Parameter refusalBackoff: see ``TokenProvider/data(for:session:refusalBackoff:)``.
   public static func execute<Payload: Decodable & Sendable>(
     query: String,
     variables: [String: String] = [:],
     token: TokenProvider,
-    session: URLSession = .shared
+    session: URLSession = .shared,
+    refusalBackoff: [Double] = TokenProvider.refusalBackoff
   ) async throws -> Payload? {
     let body = try JSONSerialization.data(withJSONObject: [
       "query": query,
@@ -114,7 +116,7 @@ public enum CloudflareGraphQL {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = body
         return request
-      }, session: session)
+      }, session: session, refusalBackoff: refusalBackoff)
     guard let http = response as? HTTPURLResponse else {
       throw CloudflareGraphQLError.invalidResponse
     }

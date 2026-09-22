@@ -60,29 +60,47 @@ struct RefusedTokenRetryTests {
       resolve: { await minter.next() }, invalidate: { token, _ in await minter.refuse(token) })
   }
 
-  @Test func execute_retriesOnceWithAFreshTokenAfterA401() async throws {
+  /// Waits skipped: the order of attempts is what is under test, not the clock.
+  private let noWait: [Double] = [0, 0]
+
+  /// What Cloudflare does to a token minted a second ago on a grant's second account:
+  /// refuses it, then accepts the very same token. It is resent, not replaced.
+  @Test func execute_resendsTheSameTokenBeforeReplacingIt() async throws {
     let minter = Minter()
     let session = ScriptedURLProtocol.session(answering: [401, 200])
 
     let payload: Payload? = try await CloudflareGraphQL.execute(
-      query: "{}", token: refreshable(minter), session: session)
+      query: "{}", token: refreshable(minter), session: session, refusalBackoff: noWait)
 
     #expect(payload != nil)
-    #expect(ScriptedURLProtocol.seenTokens == ["token-1", "token-2"])
+    #expect(ScriptedURLProtocol.seenTokens == ["token-1", "token-1"])
+    #expect(await minter.refused.isEmpty)
+  }
+
+  /// Still refused once the backoff runs out: dropped, and replaced once.
+  @Test func execute_replacesATokenStillRefusedAfterTheBackoff() async throws {
+    let minter = Minter()
+    let session = ScriptedURLProtocol.session(answering: [401, 401, 401, 200])
+
+    let payload: Payload? = try await CloudflareGraphQL.execute(
+      query: "{}", token: refreshable(minter), session: session, refusalBackoff: noWait)
+
+    #expect(payload != nil)
+    #expect(ScriptedURLProtocol.seenTokens == ["token-1", "token-1", "token-1", "token-2"])
     #expect(await minter.refused == ["token-1"])
   }
 
-  /// A second refusal from a token minted a moment ago is a real permission problem, and it
-  /// must reach the user as one rather than loop.
-  @Test func execute_givesUpAfterOneRetry() async throws {
+  /// A refusal of the fresh token too is a real permission problem, and it must reach the
+  /// user as one rather than loop.
+  @Test func execute_givesUpAfterTheFreshTokenIsRefused() async throws {
     let minter = Minter()
-    let session = ScriptedURLProtocol.session(answering: [403, 403])
+    let session = ScriptedURLProtocol.session(answering: [403, 403, 403, 403, 200])
 
     await #expect(throws: CloudflareGraphQLError.self) {
       let _: Payload? = try await CloudflareGraphQL.execute(
-        query: "{}", token: refreshable(minter), session: session)
+        query: "{}", token: refreshable(minter), session: session, refusalBackoff: noWait)
     }
-    #expect(ScriptedURLProtocol.seenTokens == ["token-1", "token-2"])
+    #expect(ScriptedURLProtocol.seenTokens == ["token-1", "token-1", "token-1", "token-2"])
   }
 
   @Test func execute_neverRetriesAPastedToken() async throws {
@@ -90,8 +108,13 @@ struct RefusedTokenRetryTests {
 
     await #expect(throws: CloudflareGraphQLError.self) {
       let _: Payload? = try await CloudflareGraphQL.execute(
-        query: "{}", token: .fixed("pasted"), session: session)
+        query: "{}", token: .fixed("pasted"), session: session, refusalBackoff: noWait)
     }
     #expect(ScriptedURLProtocol.seenTokens == ["pasted"])
+  }
+
+  /// The default is what the app ships with: a few seconds, not a few minutes.
+  @Test func theDefaultBackoffIsSevenAndAHalfSeconds() {
+    #expect(TokenProvider.refusalBackoff.reduce(0, +) == 7.5)
   }
 }

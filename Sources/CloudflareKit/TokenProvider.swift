@@ -53,27 +53,60 @@ public enum TokenProvider: Sendable {
     }
   }
 
-  /// Sends a request with this provider's token, and once more with a fresh one if Cloudflare
-  /// refuses it with a 401 or 403.
+  /// The pauses, in seconds, before resending a refused token: seven and a half in all.
   ///
-  /// **Once.** A second refusal from a token minted a moment ago is a real permission problem
-  /// and comes back to the caller as the response it is, to be reported as one. A provider
-  /// that cannot refresh is never retried: it would send the same refused string again.
+  /// Past the few seconds a new token has been measured to take, short enough that a token
+  /// that really was revoked is reported without a long hang.
+  public static let refusalBackoff: [Double] = [0.5, 1, 2, 4]
+
+  /// Sends a request with this provider's token and, if Cloudflare refuses it with a 401 or
+  /// 403, sends the **same** token again on a backoff before replacing it with a fresh one.
   ///
-  /// `makeRequest` receives the bearer token rather than a finished request, so the retry
+  /// **The same token first.** Cloudflare refuses a token minted a second ago for every
+  /// account of a grant but the first one it is used on, then accepts that same token a few
+  /// seconds later: measured in KVExplorer as 401s with 3598 of 3600 seconds left, on the
+  /// second and third accounts only. Dropping it and minting another only restarts the
+  /// wait. A token still refused once `refusalBackoff` runs out is replaced, once; a
+  /// refusal of the fresh one is a real permission problem and comes back to the caller as
+  /// the response it is. A provider that cannot refresh is never retried: it would send the
+  /// same refused string again.
+  ///
+  /// `makeRequest` receives the bearer token rather than a finished request, so a retry
   /// carries the new token and nothing else changes.
   public func data(
-    for makeRequest: (_ bearer: String) throws -> URLRequest, session: URLSession
+    for makeRequest: (_ bearer: String) throws -> URLRequest, session: URLSession,
+    refusalBackoff: [Double] = TokenProvider.refusalBackoff
+  ) async throws -> (Data, URLResponse) {
+    try await data(
+      for: makeRequest, send: { try await session.data(for: $0) },
+      refusalBackoff: refusalBackoff)
+  }
+
+  /// ``data(for:session:refusalBackoff:)`` for a client that sends through its own
+  /// transport rather than a `URLSession`.
+  public func data(
+    for makeRequest: (_ bearer: String) throws -> URLRequest,
+    send: (URLRequest) async throws -> (Data, URLResponse),
+    refusalBackoff: [Double] = TokenProvider.refusalBackoff
   ) async throws -> (Data, URLResponse) {
     let first = try await token()
-    let (data, response) = try await session.data(for: try makeRequest(first))
-    guard canRefresh, let http = response as? HTTPURLResponse,
-      http.statusCode == 401 || http.statusCode == 403
-    else { return (data, response) }
+    let request = try makeRequest(first)
+    var (data, response) = try await send(request)
+    guard canRefresh, Self.isRefusal(response) else { return (data, response) }
 
+    for delay in refusalBackoff {
+      try await Task.sleep(for: .seconds(delay))
+      (data, response) = try await send(request)
+      guard Self.isRefusal(response) else { return (data, response) }
+    }
+    let status = (response as? HTTPURLResponse)?.statusCode ?? 0
     await invalidate(
-      first,
-      reason: "HTTP \(http.statusCode): \(String(data: data, encoding: .utf8) ?? "")")
-    return try await session.data(for: try makeRequest(try await token()))
+      first, reason: "HTTP \(status): \(String(data: data, encoding: .utf8) ?? "")")
+    return try await send(try makeRequest(try await token()))
+  }
+
+  private static func isRefusal(_ response: URLResponse) -> Bool {
+    guard let http = response as? HTTPURLResponse else { return false }
+    return http.statusCode == 401 || http.statusCode == 403
   }
 }
