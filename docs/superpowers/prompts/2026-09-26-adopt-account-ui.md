@@ -77,6 +77,8 @@ doing the same adoption for this app.
 
 ## App facts (checked on 2026-09-26)
 
+A snapshot, so recheck each row in the repo before relying on it.
+
 |                      | D1Explorer                                                  | R2Explorer                                                                    |
 | -------------------- | ----------------------------------------------------------- | ----------------------------------------------------------------------------- |
 | Xcode dir            | `apps/apple`, target `SwiftD1`                              | `apps/apple`, target `SwiftR2`                                                |
