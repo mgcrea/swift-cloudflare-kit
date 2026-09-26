@@ -196,7 +196,8 @@ struct AddAccountModelTests {
       recorder: recorder,
       signIn: { throw CloudflareWebSignInError.domainNotAssociated("example.test") })
     await model.signIn()
-    #expect(model.error == "This build isn't allowed to receive the sign-in redirect from example.test.")
+    #expect(
+      model.error == "This build isn't allowed to receive the sign-in redirect from example.test.")
   }
 
   @Test func withoutAStore_signInIsHidden() {

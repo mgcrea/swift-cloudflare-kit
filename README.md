@@ -254,6 +254,29 @@ old one, signing the user out at the following expiry.
 `loadsFromDisk: false` gives a demo or screenshot build an empty store, so a run on a
 developer's machine never renders their real account names.
 
+### `CloudflareCredential`
+
+How one connection or account authenticates: `.pastedToken`, or `.oauth(accountId:)` for a
+Cloudflare sign-in. The case names are the ones D1Explorer and R2Explorer already persist,
+so their stored connections decode unchanged. `tokenProvider(pastedToken:accounts:)` turns
+one into a `TokenProvider`; where the pasted token is stored stays the app's decision.
+
+## `CloudflareKitUI`
+
+A second product, so a command-line consumer of `CloudflareKit` never links SwiftUI. It is
+how KVExplorer, D1Explorer and R2Explorer manage accounts the same way.
+
+- **`CloudflareWebSignIn`** and `CloudflareAccountStore.signInWithWebSession()`: sign-in
+  through `ASWebAuthenticationSession` on **both** platforms. The Mac used to open the
+  default browser and wait on a loopback listener; App Review rejects that (Guideline 4).
+  Needs the https callback in the app's configuration and `webcredentials:<host>` in its
+  Associated Domains on every platform. Never falls back to loopback.
+- **`AddAccountForm`**: the account sections of an add sheet. "Sign in with Cloudflare", or
+  paste an API token (listing its accounts when no ID is given, then the app's own
+  `verify`). Typing `appreview-demo` in the token field calls `onReviewDemo`.
+- **`AccountsSettingsPane`**: Settings › Accounts. Sign-in and pasted-token accounts
+  together; Sign Out confirms and names every account the same sign-in takes with it.
+
 ## Status
 
 Extraction complete: `CloudflareOAuth`, `LoopbackRedirectListener`/`Parser`, `PKCE`,
@@ -265,6 +288,8 @@ is not main-actor isolated — clients call it from arbitrary contexts — and i
 `accounts` to find a Keychain key. Every *mutation* of `accounts` is `@MainActor`. Closing
 the read means moving the id-to-key mapping into the actor, which is a change to make
 deliberately rather than as a side effect of an extraction.
+
+1.5.0 adds `CloudflareCredential` and the `CloudflareKitUI` product.
 
 ## License
 

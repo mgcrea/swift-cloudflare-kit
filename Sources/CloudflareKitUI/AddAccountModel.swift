@@ -34,8 +34,7 @@ public final class AddAccountModel {
     return hasSignedInBefore ? "Sign in to Another Account…" : "Sign in with Cloudflare"
   }
 
-  @ObservationIgnored private let signInAction:
-    (@MainActor () async throws -> [CloudflareAccount])?
+  @ObservationIgnored private let signInAction: (@MainActor () async throws -> [CloudflareAccount])?
   @ObservationIgnored private let listAccounts:
     @Sendable (String) async throws -> [CloudflareAccount]
   @ObservationIgnored private let verify: @Sendable (String, String) async throws -> Void

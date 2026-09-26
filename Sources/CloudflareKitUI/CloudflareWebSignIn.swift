@@ -29,8 +29,7 @@ private let log = Logger(subsystem: "io.mgcrea.CloudflareKitUI", category: "web-
 ///
 /// Moved from the copies in KVExplorer, D1Explorer and Almanac, unchanged in behaviour.
 @MainActor
-public final class CloudflareWebSignIn: NSObject, ASWebAuthenticationPresentationContextProviding
-{
+public final class CloudflareWebSignIn: NSObject, ASWebAuthenticationPresentationContextProviding {
   public override init() {}
 
   /// Runs one round trip. The session is held by the continuation's closure rather than a
