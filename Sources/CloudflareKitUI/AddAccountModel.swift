@@ -119,12 +119,24 @@ public final class AddAccountModel {
     isAdding = true
     defer { isAdding = false }
     do {
-      guard let account = try await resolveAccount(token: token) else { return }
+      guard let account = try await resolveAccount(token: token), isCurrent(token) else {
+        return
+      }
       try await verify(token, account.id)
+      guard isCurrent(token) else { return }
       onFinish(.pastedToken(token: token, account: account))
     } catch {
+      // An error about a token that is no longer in the field would describe the wrong one.
+      guard isCurrent(token) else { return }
       self.error = error.localizedDescription
     }
+  }
+
+  /// Whether `submitted` is still what the field holds. Every await in `addToken` can
+  /// return after the user pasted a different token, and a result for the old one must
+  /// never be shown or added beside the new one.
+  private func isCurrent(_ submitted: String) -> Bool {
+    token.trimmingCharacters(in: .whitespacesAndNewlines) == submitted
   }
 
   /// The account the token is for, or nil when the user now has to pick one.
@@ -144,6 +156,7 @@ public final class AddAccountModel {
     }
     let listed = try await listAccounts(token)
       .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    guard isCurrent(token) else { return nil }
     switch listed.count {
     case 0:
       throw AddAccountError.noAccount

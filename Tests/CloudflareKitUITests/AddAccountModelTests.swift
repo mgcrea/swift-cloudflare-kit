@@ -132,6 +132,61 @@ struct AddAccountModelTests {
     #expect(model.selectedCandidateID == nil)
   }
 
+  /// Review Focus 2, the in-flight case: the token is edited while its own listing is still
+  /// running. The listing that comes back belongs to the old token and must not become a
+  /// picker (or an added account) beside the new one.
+  @Test func editingTheToken_whileItsListingRuns_dropsTheResult() async {
+    let recorder = Recorder()
+    let gate = Gate()
+    let listAccounts: @Sendable (String) async throws -> [CloudflareAccount] = { [acme, beta] _ in
+      await gate.wait()
+      return [acme, beta]
+    }
+    let finish: @MainActor (AddAccountResult) -> Void = { recorder.finished.append($0) }
+    let model = AddAccountModel(
+      signIn: nil, listAccounts: listAccounts, verify: { _, _ in }, onReviewDemo: nil,
+      onFinish: finish)
+    model.token = "tokenA"
+    let adding = Task { await model.addToken() }
+    await gate.waitUntilEntered()
+
+    model.token = "tokenB"
+    model.tokenDidChange()
+    await gate.open()
+    await adding.value
+
+    #expect(model.candidates.isEmpty)
+    #expect(model.selectedCandidateID == nil)
+    #expect(recorder.finished.isEmpty)
+  }
+
+  /// A one-shot gate: the listing parks in `wait()` until the test opens it.
+  actor Gate {
+    private var entered = false
+    private var isOpen = false
+    private var enteredWaiters: [CheckedContinuation<Void, Never>] = []
+    private var openWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+      entered = true
+      enteredWaiters.forEach { $0.resume() }
+      enteredWaiters = []
+      if isOpen { return }
+      await withCheckedContinuation { openWaiters.append($0) }
+    }
+
+    func waitUntilEntered() async {
+      if entered { return }
+      await withCheckedContinuation { enteredWaiters.append($0) }
+    }
+
+    func open() {
+      isOpen = true
+      openWaiters.forEach { $0.resume() }
+      openWaiters = []
+    }
+  }
+
   /// Review Focus 4: a token without Account Settings: Read cannot list accounts, and the
   /// user typed the ID for exactly that reason.
   @Test func anExplicitID_survivesAListingFailure() async {
