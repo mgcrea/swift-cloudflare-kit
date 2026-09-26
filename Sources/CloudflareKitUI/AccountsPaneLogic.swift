@@ -75,6 +75,19 @@ public enum AccountsPaneLogic {
     "Used by \(count) \(count == 1 ? "connection" : "connections")"
   }
 
+  /// The confirmation shown before removing a pasted token.
+  ///
+  /// Removing is irreversible in a way signing out is not: Cloudflare shows a token only
+  /// once, so the user cannot paste it back. Connections that use it (D1, R2) are named by
+  /// count, because they stay listed but stop connecting.
+  public static func removeMessage(name: String, usedBy: Int?) -> String {
+    let once =
+      "Cloudflare shows a token only once, so adding \(name) again means creating a new token."
+    guard let usedBy, usedBy > 0 else { return once }
+    let subject = usedBy == 1 ? "1 connection uses" : "\(usedBy) connections use"
+    return "\(subject) this token and won’t connect until you add one again. \(once)"
+  }
+
   /// The names of every other account a sign-out takes with it.
   public static func otherNames(
     sharing ids: [String], with accountID: String, accounts: [CloudflareAccount]

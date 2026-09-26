@@ -115,4 +115,23 @@ struct AccountsPaneLogicTests {
       ])
     #expect(others == ["Same"])
   }
+
+  /// Removing a pasted token is irreversible: Cloudflare shows a token once. The pane asks
+  /// first, and says what else stops working.
+  @Test func remove_warnsThatTheTokenCannotBeShownAgain() {
+    #expect(
+      AccountsPaneLogic.removeMessage(name: "Acme", usedBy: nil)
+        == "Cloudflare shows a token only once, so adding Acme again means creating a new token.")
+  }
+
+  @Test func remove_namesTheConnectionsThatStopWorking() {
+    #expect(
+      AccountsPaneLogic.removeMessage(name: "Acme", usedBy: 1)
+        == "1 connection uses this token and won’t connect until you add one again. Cloudflare shows a token only once, so adding Acme again means creating a new token."
+    )
+    #expect(
+      AccountsPaneLogic.removeMessage(name: "Acme", usedBy: 3)
+        == "3 connections use this token and won’t connect until you add one again. Cloudflare shows a token only once, so adding Acme again means creating a new token."
+    )
+  }
 }

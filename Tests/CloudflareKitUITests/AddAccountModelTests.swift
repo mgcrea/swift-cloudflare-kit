@@ -169,7 +169,7 @@ struct AddAccountModelTests {
 
     func wait() async {
       entered = true
-      enteredWaiters.forEach { $0.resume() }
+      for waiter in enteredWaiters { waiter.resume() }
       enteredWaiters = []
       if isOpen { return }
       await withCheckedContinuation { openWaiters.append($0) }
@@ -182,7 +182,7 @@ struct AddAccountModelTests {
 
     func open() {
       isOpen = true
-      openWaiters.forEach { $0.resume() }
+      for waiter in openWaiters { waiter.resume() }
       openWaiters = []
     }
   }

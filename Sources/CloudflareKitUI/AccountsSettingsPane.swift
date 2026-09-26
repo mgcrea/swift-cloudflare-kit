@@ -16,6 +16,7 @@ public struct AccountsSettingsPane: View {
 
   @Environment(\.openURL) private var openURL
   @State private var pendingSignOut: AccountRow?
+  @State private var pendingRemoval: AccountRow?
   @State private var busyRowID: String?
   @State private var error: String?
 
@@ -95,6 +96,17 @@ public struct AccountsSettingsPane: View {
     } message: { row in
       Text(signOutMessage(row))
     }
+    .confirmationDialog(
+      "Remove the API token for \(pendingRemoval?.name ?? "")?",
+      isPresented: Binding(
+        get: { pendingRemoval != nil }, set: { if !$0 { pendingRemoval = nil } }),
+      titleVisibility: .visible,
+      presenting: pendingRemoval
+    ) { row in
+      Button("Remove", role: .destructive) { Task { await remove(row) } }
+    } message: { row in
+      Text(AccountsPaneLogic.removeMessage(name: row.name, usedBy: usedBy(row)))
+    }
   }
 
   @ViewBuilder
@@ -129,20 +141,24 @@ public struct AccountsSettingsPane: View {
         // something this app can do on their behalf.
         Button("Manage on Cloudflare…") { openURL(CloudflareOAuth.connectedApplications) }
       case .pastedToken:
-        Button("Remove", role: .destructive) {
-          Task {
-            busyRowID = row.id
-            defer { busyRowID = nil }
-            await removePastedToken(row.accountID)
-          }
-        }
-        .accessibilityIdentifier("accounts.remove.\(row.accountID)")
+        Button("Remove", role: .destructive) { pendingRemoval = row }
+          .accessibilityIdentifier("accounts.remove.\(row.accountID)")
       }
       if busyRowID == row.id {
         ProgressView().controlSize(.small)
       }
     }
     .disabled(isDemo || busyRowID != nil)
+  }
+
+  private func usedBy(_ row: AccountRow) -> Int? {
+    if case .pastedToken(let usedBy) = row.kind { usedBy } else { nil }
+  }
+
+  private func remove(_ row: AccountRow) async {
+    busyRowID = row.id
+    defer { busyRowID = nil }
+    await removePastedToken(row.accountID)
   }
 
   private func signOutMessage(_ row: AccountRow) -> String {
