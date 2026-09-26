@@ -157,6 +157,10 @@ public final class CloudflareAccountStore: @unchecked Sendable {
 
   public var accounts: [CloudflareAccount] = []
 
+  /// The OAuth registration this store signs in with. Public so the UI product can read the
+  /// app's https callback and scope list without every app passing them in a second time.
+  public var configuration: CloudflareOAuthConfiguration { dependencies.oauth.configuration }
+
   /// Access tokens, in memory only and behind an actor. They live minutes and are cheap to
   /// re-mint, so persisting them would buy nothing and widen what a stolen disk yields.
   @ObservationIgnored private let tokens = TokenStore()
