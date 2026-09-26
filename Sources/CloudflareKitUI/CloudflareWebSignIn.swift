@@ -47,23 +47,8 @@ public final class CloudflareWebSignIn: NSObject, ASWebAuthenticationPresentatio
     #endif
     return try await withCheckedThrowingContinuation { continuation in
       let session = ASWebAuthenticationSession(
-        url: url, callback: .https(host: host, path: path)
-      ) { callbackURL, error in
-        if let callbackURL {
-          continuation.resume(returning: callbackURL)
-          return
-        }
-        let classified = Self.classify(error, host: host)
-        if classified as? CloudflareOAuthError == .cancelled {
-          log.notice("sign-in cancelled by the user")
-        } else {
-          let detail = (error as NSError?)?.localizedFailureReason ?? ""
-          log.error(
-            "authorization session failed: \(String(describing: classified), privacy: .public) \(detail, privacy: .public)"
-          )
-        }
-        continuation.resume(throwing: classified)
-      }
+        url: url, callback: .https(host: host, path: path),
+        completionHandler: Self.completion(host: host, continuation: continuation))
       session.presentationContextProvider = self
       guard session.start() else {
         // No anchor to present from, which on iOS means the scene is not foreground.
@@ -71,6 +56,35 @@ public final class CloudflareWebSignIn: NSObject, ASWebAuthenticationPresentatio
         continuation.resume(throwing: CloudflareWebSignInError.couldNotStart)
         return
       }
+    }
+  }
+
+  /// The session's completion handler, built outside the actor.
+  ///
+  /// The session calls it on an XPC reply queue, never the main thread. Written inline in
+  /// `authorize`, the closure is inferred `@MainActor`, and Swift 6 checks that isolation
+  /// at runtime: the first sign-in trapped in `dispatch_assert_queue` (KVExplorer build
+  /// 54). The app-side copies this replaced never tripped it only because the apps build in
+  /// Swift 5 mode. Nothing here needs the main actor: the continuation can be resumed from
+  /// any thread.
+  nonisolated static func completion(
+    host: String, continuation: CheckedContinuation<URL, any Error>
+  ) -> @Sendable (URL?, (any Error)?) -> Void {
+    { callbackURL, error in
+      if let callbackURL {
+        continuation.resume(returning: callbackURL)
+        return
+      }
+      let classified = classify(error, host: host)
+      if classified as? CloudflareOAuthError == .cancelled {
+        log.notice("sign-in cancelled by the user")
+      } else {
+        let detail = (error as NSError?)?.localizedFailureReason ?? ""
+        log.error(
+          "authorization session failed: \(String(describing: classified), privacy: .public) \(detail, privacy: .public)"
+        )
+      }
+      continuation.resume(throwing: classified)
     }
   }
 

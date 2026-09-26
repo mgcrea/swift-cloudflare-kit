@@ -67,3 +67,33 @@ struct CloudflareWebSignInTests {
     }
   }
 }
+
+/// Not `@MainActor`, unlike the suite above: the point is to call from elsewhere.
+@Suite("In-app sign-in callback")
+struct CloudflareWebSignInCallbackTests {
+  /// `ASWebAuthenticationSession` calls its handler on an XPC reply queue, not the main
+  /// thread. A handler inferred `@MainActor` traps there in Swift 6 mode, which is what
+  /// KVExplorer build 54 did on its first sign-in.
+  @Test func aCallbackURL_isDeliveredFromAnyQueue() async throws {
+    let url = URL(string: "https://example.test/oauth/callback?code=abc")!
+    let received = try await withCheckedThrowingContinuation { continuation in
+      let completion = CloudflareWebSignIn.completion(
+        host: "example.test", continuation: continuation)
+      DispatchQueue.global().async { completion(url, nil) }
+    }
+    #expect(received == url)
+  }
+
+  @Test func anError_isClassifiedFromAnyQueue() async {
+    let cancel = NSError(
+      domain: ASWebAuthenticationSessionError.errorDomain,
+      code: ASWebAuthenticationSessionError.Code.canceledLogin.rawValue)
+    await #expect(throws: CloudflareOAuthError.cancelled) {
+      try await withCheckedThrowingContinuation { continuation in
+        let completion = CloudflareWebSignIn.completion(
+          host: "example.test", continuation: continuation)
+        DispatchQueue.global().async { completion(nil, cancel) }
+      }
+    }
+  }
+}
