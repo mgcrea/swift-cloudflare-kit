@@ -30,6 +30,12 @@ public enum CloudflareOAuthError: LocalizedError, Equatable, Sendable {
   case grantExpired
   case server(status: Int, code: String?, message: String)
 
+  /// Whether `error` means the sign-in has to be redone, as opposed to retried. For call
+  /// sites holding an `any Error` from a client, where the fix is a Sign In Again button.
+  public static func isGrantExpired(_ error: any Error) -> Bool {
+    (error as? CloudflareOAuthError) == .grantExpired
+  }
+
   public var errorDescription: String? {
     switch self {
     case .cancelled:

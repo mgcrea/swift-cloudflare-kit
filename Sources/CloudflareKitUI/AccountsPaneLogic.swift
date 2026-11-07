@@ -31,6 +31,8 @@ public struct AccountRow: Identifiable, Equatable, Sendable {
   public var accountID: String
   public var name: String
   public var kind: Kind
+  /// A sign-in whose grant Cloudflare refused to refresh. Always false for a pasted token.
+  public var needsSignIn = false
 }
 
 /// Everything the Accounts pane decides, as plain functions.
@@ -39,12 +41,14 @@ public enum AccountsPaneLogic {
   public static func rows(
     signedIn: [CloudflareAccount],
     pastedTokens: [PastedTokenAccount],
+    expired: Set<String> = [],
     configuration: CloudflareOAuthConfiguration
   ) -> [AccountRow] {
     let signIns = signedIn.map { account in
       AccountRow(
         id: "signIn:\(account.id)", accountID: account.id, name: account.name,
-        kind: .signedIn(declinedScopes: account.declinedScopes(against: configuration)))
+        kind: .signedIn(declinedScopes: account.declinedScopes(against: configuration)),
+        needsSignIn: expired.contains(account.id))
     }
     let tokens = pastedTokens.map { token in
       AccountRow(
@@ -113,5 +117,18 @@ public enum AccountsPaneLogic {
     let verb = sorted.count == 1 ? "was" : "were"
     return
       "Signing out of \(name) also signs out of \(list), which \(verb) added in the same sign-in."
+  }
+
+  /// What to tell the user after Sign In Again, or nil when it worked.
+  ///
+  /// The browser keeps its own Cloudflare session, so the sign-in can succeed as a different
+  /// user whose grant does not cover this account. That is not an error anywhere else, and
+  /// left unsaid the row would simply stay expired.
+  public static func signInAgainFailure(
+    accountID: String, name: String, unlocked: [CloudflareAccount]
+  ) -> String? {
+    guard !unlocked.contains(where: { $0.id == accountID }) else { return nil }
+    return
+      "That sign-in doesn’t include \(name). Sign in as a Cloudflare user who is a member of it."
   }
 }

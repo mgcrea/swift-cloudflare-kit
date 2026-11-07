@@ -134,4 +134,35 @@ struct AccountsPaneLogicTests {
         == "3 connections use this token and won’t connect until you add one again. Cloudflare shows a token only once, so adding Acme again means creating a new token."
     )
   }
+  // MARK: - Expired sign-ins
+
+  @Test func rows_markOnlyTheExpiredSignIns() {
+    let rows = AccountsPaneLogic.rows(
+      signedIn: [
+        CloudflareAccount(id: "a", name: "Acme"), CloudflareAccount(id: "b", name: "Beta"),
+      ],
+      pastedTokens: [PastedTokenAccount(id: "a", name: "Acme")],
+      expired: ["a"],
+      configuration: configuration)
+    #expect(rows.map(\.id) == ["signIn:a", "token:a", "signIn:b"])
+    // The pasted token for the same account is not a grant and cannot expire this way.
+    #expect(rows.map(\.needsSignIn) == [true, false, false])
+  }
+
+  @Test func signInAgain_succeedsWhenTheGrantCoversTheAccount() {
+    #expect(
+      AccountsPaneLogic.signInAgainFailure(
+        accountID: "a", name: "Acme", unlocked: [CloudflareAccount(id: "a", name: "Acme")])
+        == nil)
+  }
+
+  /// The browser may still be signed in as someone else, and that sign-in succeeds. Saying
+  /// nothing would leave the row expired with no hint why.
+  @Test func signInAgain_namesTheAccountTheGrantMissed() {
+    #expect(
+      AccountsPaneLogic.signInAgainFailure(
+        accountID: "a", name: "Acme", unlocked: [CloudflareAccount(id: "b", name: "Beta")])
+        == "That sign-in doesn’t include Acme. Sign in as a Cloudflare user who is a member of it."
+    )
+  }
 }

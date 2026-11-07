@@ -157,6 +157,23 @@ public final class CloudflareAccountStore: @unchecked Sendable {
 
   public var accounts: [CloudflareAccount] = []
 
+  /// The accounts whose grant Cloudflare refused to refresh (`invalid_grant`): the refresh
+  /// token is spent or was revoked, and only signing in again brings them back.
+  ///
+  /// Without this an expired account looked exactly like a working one in Settings ›
+  /// Accounts, and the only button beside it led to Cloudflare's dashboard, where nothing
+  /// signs you back in. Kept in memory only: it is learnt from the first failed refresh,
+  /// which an app makes as soon as it loads anything, and persisting it would leave an
+  /// account marked expired after it was fixed from another device.
+  ///
+  /// Written on the main actor, like `accounts`, because the UI observes it.
+  public private(set) var expiredAccountIDs: Set<String> = []
+
+  /// Whether `accountID` needs the user to sign in again before it can be used.
+  public func needsSignIn(_ accountID: String) -> Bool {
+    expiredAccountIDs.contains(accountID)
+  }
+
   /// The OAuth registration this store signs in with. Public so the UI product can read the
   /// app's https callback and scope list without every app passing them in a second time.
   public var configuration: CloudflareOAuthConfiguration { dependencies.oauth.configuration }
@@ -324,6 +341,7 @@ public final class CloudflareAccountStore: @unchecked Sendable {
       try dependencies.saveSecret(
         refreshToken, keychainKey(for: account), synchronizable)
       upsert(account)
+      expiredAccountIDs.remove(account.id)
       unlocked.append(account)
       await tokens.adopt(response, for: account.id)
     }
@@ -393,6 +411,7 @@ public final class CloudflareAccountStore: @unchecked Sendable {
     let store = tokens
     Task { await store.forget(accountID) }
     accounts.removeAll { $0.id == accountID }
+    expiredAccountIDs.remove(accountID)
     save()
   }
 
@@ -426,8 +445,9 @@ public final class CloudflareAccountStore: @unchecked Sendable {
 
     // Returns nil when another caller refreshed while this one was waiting — the token it
     // minted is already cached, so fall through and read it.
-    guard
-      let response = try await tokens.token(
+    let minted: CloudflareOAuth.TokenResponse?
+    do {
+      minted = try await tokens.token(
         for: accountID,
         grant: stored,
         sharedWith: sharing.map(\.id),
@@ -445,7 +465,14 @@ public final class CloudflareAccountStore: @unchecked Sendable {
           }
           return response
         })
-    else {
+    } catch CloudflareOAuthError.grantExpired {
+      // Every account of the grant shares its refresh token, so they are all dead with it,
+      // and the UI should say so for each rather than only the one that asked.
+      let ids = sharing.map(\.id)
+      await MainActor.run { self.expiredAccountIDs.formUnion(ids) }
+      throw CloudflareOAuthError.grantExpired
+    }
+    guard let response = minted else {
       guard let cached = await tokens.cachedToken(for: accountID) else {
         throw CloudflareOAuthError.grantExpired
       }

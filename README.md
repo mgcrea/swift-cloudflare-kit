@@ -251,6 +251,14 @@ Applications.
 unconditionally overwrites a good stored token with nothing on the responses that reuse the
 old one, signing the user out at the following expiry.
 
+**An expired grant is remembered, per account.** When a refresh comes back `invalid_grant`,
+every account of that grant goes into `expiredAccountIDs` (`needsSignIn(_:)` reads it), and a
+sign-in that covers an account clears it. The UI reads it to offer Sign In Again; before, an
+expired account looked exactly like a working one. It is in memory only, learnt from the
+first failed refresh, so a fix made on another device is never contradicted by a stale mark.
+`CloudflareOAuthError.isGrantExpired(_:)` tells a call site holding `any Error` that this is
+the failure to offer it for.
+
 `loadsFromDisk: false` gives a demo or screenshot build an empty store, so a run on a
 developer's machine never renders their real account names.
 
@@ -275,7 +283,13 @@ how KVExplorer, D1Explorer and R2Explorer manage accounts the same way.
   paste an API token (listing its accounts when no ID is given, then the app's own
   `verify`). Typing `appreview-demo` in the token field calls `onReviewDemo`.
 - **`AccountsSettingsPane`**: Settings › Accounts. Sign-in and pasted-token accounts
-  together; Sign Out confirms and names every account the same sign-in takes with it.
+  together; Sign Out confirms and names every account the same sign-in takes with it. An
+  expired sign-in is marked red and gets **Sign In Again**.
+- **`CloudflareSignInAgainButton`**: the same Sign In Again, for an app's own error screen,
+  where the user first finds out. Signing in again replaces the grant under the same
+  account, so every connection using it recovers without being edited. A sign-in that
+  succeeds as a Cloudflare user without access to the account says so instead of silently
+  leaving it expired.
 
 ## Status
 
@@ -289,7 +303,9 @@ is not main-actor isolated — clients call it from arbitrary contexts — and i
 the read means moving the id-to-key mapping into the actor, which is a change to make
 deliberately rather than as a side effect of an extraction.
 
-1.5.0 adds `CloudflareCredential` and the `CloudflareKitUI` product.
+1.5.0 adds `CloudflareCredential` and the `CloudflareKitUI` product. 1.6.0 adds expired-grant
+tracking (`expiredAccountIDs`, `CloudflareOAuthError.isGrantExpired`) and
+`CloudflareSignInAgainButton`.
 
 ## License
 

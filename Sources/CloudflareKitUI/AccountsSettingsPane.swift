@@ -46,7 +46,7 @@ public struct AccountsSettingsPane: View {
     }
     return AccountsPaneLogic.rows(
       signedIn: accounts.accounts, pastedTokens: pastedTokens,
-      configuration: accounts.configuration)
+      expired: accounts.expiredAccountIDs, configuration: accounts.configuration)
   }
 
   public var body: some View {
@@ -112,6 +112,12 @@ public struct AccountsSettingsPane: View {
   @ViewBuilder
   private func kindLine(_ row: AccountRow) -> some View {
     switch row.kind {
+    case .signedIn where row.needsSignIn:
+      // Red, unlike a declined scope: nothing works until the user signs in again.
+      Label(
+        "Signed in with Cloudflare · Sign-in expired", systemImage: "exclamationmark.circle"
+      )
+      .foregroundStyle(.red)
     case .signedIn(let declined):
       Label(
         "Signed in with Cloudflare · "
@@ -135,6 +141,10 @@ public struct AccountsSettingsPane: View {
     HStack {
       switch row.kind {
       case .signedIn:
+        if row.needsSignIn, let accounts {
+          CloudflareSignInAgainButton(accounts: accounts, accountID: row.accountID)
+            .buttonStyle(.borderedProminent)
+        }
         Button("Sign Out", role: .destructive) { pendingSignOut = row }
           .accessibilityIdentifier("accounts.signOut.\(row.accountID)")
         // Beside Sign Out because revoking is the user's to do directly, not only
